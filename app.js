@@ -191,17 +191,22 @@ async function generatePreview() {
         const houseImageBase64 = canvas.toDataURL('image/png');
         const maskImageBase64 = createMask();
         
-        // Prepara il prompt
-        const prompt = `Replace the selected area with a modern window or door. The new window should match the architectural style of the house. High quality, photorealistic, seamless integration, professional architectural visualization.`;
+        // Prompt ottimizzato per risultati photorealistic e seamless
+        const prompt = `Replace the window or door in the selected area with a modern, high-quality window that perfectly matches the architectural style of the house. Photorealistic rendering, seamless integration with surrounding walls and structure, natural lighting and shadows, professional architectural visualization, ultra-detailed.`;
         
-        const version = "d5a2f6e5b527a7c6f5e8d4e1b9f3c2a1e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2";
+        // Version attuale del modello zsxkib/flux-dev-inpainting (al 10 febbraio 2026)
+        const version = "11cca3274341de7aef06f04e4dab3d651ea8ac04eff003f23603d4fdf5b56ff0";
+        
         const input = {
-            image: houseImageBase64,
-            mask: maskImageBase64,
+            file: houseImageBase64,                  // Immagine originale (rinominato da "image")
+            mask: maskImageBase64,                   // Maschera (bianco = area da sostituire)
             prompt: prompt,
-            num_outputs: 1,
-            guidance_scale: 7.5,
-            num_inference_steps: 50,
+            strength: 0.99,                          // Alto = sostituzione quasi completa (perfetto per serramenti)
+            guidance_scale: 7.5,                     // Buon bilanciamento aderenza prompt/qualità
+            num_inference_steps: 28,                 // FLUX è veloce, 28-30 steps bastano per alta qualità
+            num_outputs: 1,                          // Una sola immagine
+            output_quality: 95                       // Massima qualità output
+            // width/height lasciati default (1024x1024) → upscale automatico per risultati migliori
         };
         
         // Crea prediction tramite Netlify Function
