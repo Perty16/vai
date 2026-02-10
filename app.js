@@ -167,8 +167,6 @@ function createMask() {
 // Funzione principale per generare l'anteprima
 async function generatePreview() {
     // Validazione
-    const apiKey = document.getElementById('api-key').value.trim();
-    
     if (!houseImage) {
         alert('Carica prima l\'immagine della casa!');
         return;
@@ -184,11 +182,6 @@ async function generatePreview() {
         return;
     }
     
-    if (!apiKey) {
-        alert('Inserisci la tua API key di Replicate!');
-        return;
-    }
-    
     // Mostra loading
     document.getElementById('loading').style.display = 'block';
     document.getElementById('step5').style.display = 'none';
@@ -201,34 +194,32 @@ async function generatePreview() {
         // Prepara il prompt
         const prompt = `Replace the selected area with a modern window or door. The new window should match the architectural style of the house. High quality, photorealistic, seamless integration, professional architectural visualization.`;
         
-        // Chiamata API a Replicate
-        const response = await fetch('https://api.replicate.com/v1/predictions', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Token ${apiKey}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                version: "d5a2f6e5b527a7c6f5e8d4e1b9f3c2a1e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2",
-                input: {
-                    image: houseImageBase64,
-                    mask: maskImageBase64,
-                    prompt: prompt,
-                    num_outputs: 1,
-                    guidance_scale: 7.5,
-                    num_inference_steps: 50,
-                }
-            })
+        const version = "d5a2f6e5b527a7c6f5e8d4e1b9f3c2a1e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2";
+        const input = {
+            image: houseImageBase64,
+            mask: maskImageBase64,
+            prompt: prompt,
+            num_outputs: 1,
+            guidance_scale: 7.5,
+            num_inference_steps: 50,
+        };
+        
+        // Crea prediction tramite Netlify Function
+        const createResponse = await fetch("/.netlify/functions/create-prediction", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ version, input })
         });
         
-        if (!response.ok) {
-            throw new Error(`Errore API: ${response.statusText}`);
+        if (!createResponse.ok) {
+            const errText = await createResponse.text();
+            throw new Error(`Errore creazione prediction: ${createResponse.status} ${errText}`);
         }
         
-        const prediction = await response.json();
+        const prediction = await createResponse.json();
         
-        // Polling per il risultato
-        const result = await pollPrediction(prediction.id, apiKey);
+        // Polling tramite Netlify Function
+        const result = await pollPrediction(prediction.id);
         
         // Mostra il risultato
         if (result && result.output) {
@@ -246,31 +237,31 @@ async function generatePreview() {
         document.getElementById('loading').style.display = 'none';
         document.getElementById('step5').style.display = 'block';
         
-        alert(`Si è verificato un errore: ${error.message}\n\nAssicurati che la tua API key sia corretta e che tu abbia crediti disponibili su Replicate.`);
+        alert(`Si è verificato un errore: ${error.message}`);
     }
 }
 
 // Funzione per il polling del risultato
-async function pollPrediction(predictionId, apiKey) {
-    const maxAttempts = 60; // 60 tentativi = 2 minuti max
+async function pollPrediction(predictionId) {
+    const maxAttempts = 60;
     let attempts = 0;
     
     while (attempts < maxAttempts) {
-        const response = await fetch(`https://api.replicate.com/v1/predictions/${predictionId}`, {
-            headers: {
-                'Authorization': `Token ${apiKey}`,
-            }
-        });
+        const response = await fetch(`/.netlify/functions/get-prediction?id=${predictionId}`);
+        
+        if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`Errore polling: ${response.status} ${errText}`);
+        }
         
         const prediction = await response.json();
         
         if (prediction.status === 'succeeded') {
             return prediction;
         } else if (prediction.status === 'failed') {
-            throw new Error('La generazione è fallita');
+            throw new Error(`La generazione è fallita: ${prediction.error || 'Errore sconosciuto'}`);
         }
         
-        // Attendi 2 secondi prima del prossimo tentativo
         await new Promise(resolve => setTimeout(resolve, 2000));
         attempts++;
     }
