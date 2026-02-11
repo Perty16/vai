@@ -172,14 +172,30 @@ async function generatePreview() {
     const houseBase64 = canvas.toDataURL('image/png'); // Casa (con selezione ma no mask forzata)
     const windowBase64 = windowImage.src; // Assumi sia già data URL; altrimenti converti
 
-    // 1. Upload base (casa)
+       // 1. Upload base (casa)
     const uploadBaseRes = await fetch('/.netlify/functions/upload-image', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ base64Image: houseBase64, filename: 'casa.png' }),
     });
-    if (!uploadBaseRes.ok) throw new Error('Upload casa fallito');
+    if (!uploadBaseRes.ok) {
+      const errText = await uploadBaseRes.text();
+      throw new Error(`Upload casa fallito: ${uploadBaseRes.status} - ${JSON.parse(errText).error || errText}`);
+    }
     const { imageId: baseId } = await uploadBaseRes.json();
+
+    // 2. Upload reference (serramento)
+    let windowBase64 = document.getElementById('window-preview').src; // o windowImage.src se disponibile
+    const uploadRefRes = await fetch('/.netlify/functions/upload-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base64Image: windowBase64, filename: 'serramento.png' }),
+    });
+    if (!uploadRefRes.ok) {
+      const errText = await uploadRefRes.text();
+      throw new Error(`Upload serramento fallito: ${uploadRefRes.status} - ${JSON.parse(errText).error || errText}`);
+    }
+    const { imageId: refId } = await uploadRefRes.json();
 
     // 2. Upload reference (serramento)
     const uploadRefRes = await fetch('/.netlify/functions/upload-image', {
