@@ -7,11 +7,11 @@ exports.handler = async (event) => {
   const apiKey = process.env.LEONARDO_API_KEY;
 
   if (!apiKey) {
-    return { statusCode: 500, body: JSON.stringify({ error: 'API key not configured' }) };
+    return { statusCode: 500, body: JSON.stringify({ error: 'API key Leonardo non configurata sul server' }) };
   }
 
   try {
-    // Step 1: Ottieni presigned URL
+    // Step 1: Presigned URL
     const initRes = await fetch('https://cloud.leonardo.ai/api/rest/v1/init-image', {
       method: 'POST',
       headers: {
@@ -24,29 +24,33 @@ exports.handler = async (event) => {
     });
 
     if (!initRes.ok) {
-      const err = await initRes.text();
-      throw new Error(`Init upload failed: ${initRes.status} ${err}`);
+      const errText = await initRes.text();
+      throw new Error(`Presigned fallito: ${initRes.status} - ${errText}`);
     }
 
-    const { uploadInitImage } = await initRes.json();
-    const { url, fields, imageId } = uploadInitImage;
+    const initData = await initRes.json();
+    const { fields, url, imageId } = initData.uploadInitImage || initData; // Adatta se struttura diversa
 
-    // Step 2: Upload file a S3 con presigned
+    const fieldsObj = typeof fields === 'string' ? JSON.parse(fields) : fields;
+
+    // Step 2: FormData
     const formData = new FormData();
-    Object.entries(JSON.parse(fields)).forEach(([key, value]) => {
+    Object.entries(fieldsObj).forEach(([key, value]) => {
       formData.append(key, value);
     });
 
-    const blob = Buffer.from(base64Image.split(',')[1], 'base64');
-    formData.append('file', blob, filename);
+    const buffer = Buffer.from(base64Image.split(',')[1], 'base64');
+    formData.append('file', buffer, { filename });
 
+    // Upload S3 (NO headers auth!)
     const uploadRes = await fetch(url, {
       method: 'POST',
       body: formData,
     });
 
     if (!uploadRes.ok) {
-      throw new Error(`S3 upload failed: ${uploadRes.status}`);
+      const errText = await uploadRes.text();
+      throw new Error(`Upload S3 fallito: ${uploadRes.status} - ${errText}`);
     }
 
     return {
@@ -54,7 +58,7 @@ exports.handler = async (event) => {
       body: JSON.stringify({ imageId }),
     };
   } catch (error) {
-    console.error(error);
+    console.error('Upload error:', error);
     return { statusCode: 500, body: JSON.stringify({ error: error.message }) };
   }
 };
