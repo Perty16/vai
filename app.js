@@ -141,109 +141,116 @@ function clearSelection() {
 }
 
 // Funzione per creare la maschera
-function createMask() {
-    if (!selectionRect) {
-        alert('Per favore, seleziona prima l\'area del serramento!');
-        return null;
+
+
+// ... (variabili globali, upload handlers, selection, ecc. rimangono uguali)
+
+// Rimuovi o commenta createMask se non serve più per API
+// function createMask() { ... }  // non usata ora
+
+async function generatePreview() {
+  if (!houseImage) {
+    alert('Carica prima l\'immagine della casa!');
+    return;
+  }
+
+  if (!selectionRect) {
+    alert('Seleziona l\'area del serramento da sostituire!');
+    return;
+  }
+
+  if (!windowImage) {
+    alert('Carica l\'immagine del nuovo serramento!');
+    return;
+  }
+
+  document.getElementById('loading').style.display = 'block';
+  document.getElementById('step5').style.display = 'none';
+
+  try {
+    // Base64 immagini
+    const houseBase64 = canvas.toDataURL('image/png'); // Casa (con selezione ma no mask forzata)
+    const windowBase64 = windowImage.src; // Assumi sia già data URL; altrimenti converti
+
+    // 1. Upload base (casa)
+    const uploadBaseRes = await fetch('/.netlify/functions/upload-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base64Image: houseBase64, filename: 'casa.png' }),
+    });
+    if (!uploadBaseRes.ok) throw new Error('Upload casa fallito');
+    const { imageId: baseId } = await uploadBaseRes.json();
+
+    // 2. Upload reference (serramento)
+    const uploadRefRes = await fetch('/.netlify/functions/upload-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base64Image: windowBase64, filename: 'serramento.png' }),
+    });
+    if (!uploadRefRes.ok) throw new Error('Upload serramento fallito');
+    const { imageId: refId } = await uploadRefRes.json();
+
+    // Prompt stabile (usa questo identico o simile)
+    const prompt = `Replace the selected window or door area with a modern high-quality version inspired by the reference serramento image, seamless integration into the house architecture, photorealistic rendering, perfect matching of style materials lighting and shadows, professional architectural visualization, ultra detailed, natural perspective`;
+
+    // 3. Genera
+    const genRes = await fetch('/.netlify/functions/generate-leonardo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt,
+        initImageId: baseId,
+        imagePromptIds: [refId],  // reference serramento
+      }),
+    });
+    if (!genRes.ok) {
+      const err = await genRes.text();
+      throw new Error(`Generazione fallita: ${genRes.status} ${err}`);
     }
-    
-    // Crea un canvas temporaneo per la maschera
-    const maskCanvas = document.createElement('canvas');
-    maskCanvas.width = canvas.width;
-    maskCanvas.height = canvas.height;
-    const maskCtx = maskCanvas.getContext('2d');
-    
-    // Sfondo nero (area da non modificare)
-    maskCtx.fillStyle = '#000000';
-    maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
-    
-    // Area bianca (area da sostituire)
-    maskCtx.fillStyle = '#FFFFFF';
-    maskCtx.fillRect(selectionRect.x, selectionRect.y, selectionRect.width, selectionRect.height);
-    
-    return maskCanvas.toDataURL('image/png');
+    const { id: generationId } = await genRes.json();  // Assumi response ha "id"
+
+    // 4. Polling
+    const result = await pollLeonardo(generationId);
+
+    if (result && result.generated_images && result.generated_images.length > 0) {
+      const resultUrl = result.generated_images[0].url;  // o path simile, verifica docs response
+      document.getElementById('result-image').src = resultUrl;
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('result').style.display = 'block';
+      document.getElementById('result').scrollIntoView({ behavior: 'smooth' });
+    } else {
+      throw new Error('Nessun output generato');
+    }
+
+  } catch (error) {
+    console.error(error);
+    alert(`Errore: ${error.message}`);
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('step5').style.display = 'block';
+  }
 }
 
-// Funzione principale per generare l'anteprima
-async function generatePreview() {
-    // Validazione
-    if (!houseImage) {
-        alert('Carica prima l\'immagine della casa!');
-        return;
+async function pollLeonardo(generationId) {
+  const maxAttempts = 60;
+  let attempts = 0;
+
+  while (attempts < maxAttempts) {
+    const res = await fetch(`/.netlify/functions/get-generation?id=${generationId}`);
+    if (!res.ok) throw new Error(`Polling error: ${res.status}`);
+
+    const data = await res.json();
+
+    if (data.status === 'COMPLETE' || data.status === 'completed') {
+      return data;
+    } else if (data.status === 'FAILED') {
+      throw new Error('Generazione fallita: ' + (data.error || 'unknown'));
     }
-    
-    if (!selectionRect) {
-        alert('Seleziona l\'area del serramento da sostituire!');
-        return;
-    }
-    
-    if (!windowImage) {
-        alert('Carica l\'immagine del nuovo serramento!');
-        return;
-    }
-    
-    // Mostra loading
-    document.getElementById('loading').style.display = 'block';
-    document.getElementById('step5').style.display = 'none';
-    
-    try {
-        // Prepara i dati
-        const houseImageBase64 = canvas.toDataURL('image/png');
-        const maskImageBase64 = createMask();
-        
-        // Prompt ottimizzato per risultati photorealistic e seamless
-        const prompt = `Replace the window or door in the selected area with a modern, high-quality window that perfectly matches the architectural style of the house. Photorealistic rendering, seamless integration with surrounding walls and structure, natural lighting and shadows, professional architectural visualization, ultra-detailed.`;
-        
-        // Version attuale del modello zsxkib/flux-dev-inpainting (al 10 febbraio 2026)
-        const version = "11cca3274341de7aef06f04e4dab3d651ea8ac04eff003f23603d4fdf5b56ff0";
-        
-        const input = {
-            file: houseImageBase64,                  // Immagine originale (rinominato da "image")
-            mask: maskImageBase64,                   // Maschera (bianco = area da sostituire)
-            prompt: prompt,
-            strength: 0.99,                          // Alto = sostituzione quasi completa (perfetto per serramenti)
-            guidance_scale: 7.5,                     // Buon bilanciamento aderenza prompt/qualità
-            num_inference_steps: 28,                 // FLUX è veloce, 28-30 steps bastano per alta qualità
-            num_outputs: 1,                          // Una sola immagine
-            output_quality: 95                       // Massima qualità output
-            // width/height lasciati default (1024x1024) → upscale automatico per risultati migliori
-        };
-        
-        // Crea prediction tramite Netlify Function
-        const createResponse = await fetch("/.netlify/functions/create-prediction", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ version, input })
-        });
-        
-        if (!createResponse.ok) {
-            const errText = await createResponse.text();
-            throw new Error(`Errore creazione prediction: ${createResponse.status} ${errText}`);
-        }
-        
-        const prediction = await createResponse.json();
-        
-        // Polling tramite Netlify Function
-        const result = await pollPrediction(prediction.id);
-        
-        // Mostra il risultato
-        if (result && result.output) {
-            const resultUrl = Array.isArray(result.output) ? result.output[0] : result.output;
-            document.getElementById('result-image').src = resultUrl;
-            document.getElementById('loading').style.display = 'none';
-            document.getElementById('result').style.display = 'block';
-            document.getElementById('result').scrollIntoView({ behavior: 'smooth' });
-        } else {
-            throw new Error('Nessun output ricevuto dall\'API');
-        }
-        
-    } catch (error) {
-        console.error('Errore:', error);
-        document.getElementById('loading').style.display = 'none';
-        document.getElementById('step5').style.display = 'block';
-        
-        alert(`Si è verificato un errore: ${error.message}`);
-    }
+
+    await new Promise(r => setTimeout(r, 3000)); // 3 sec
+    attempts++;
+  }
+
+  throw new Error('Timeout polling');
 }
 
 // Funzione per il polling del risultato
